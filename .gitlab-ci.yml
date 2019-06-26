@@ -1,0 +1,89 @@
+image: cloudbees/java-with-docker-client:8-jdk-18.06.1-ce
+
+cache:
+  key: "$CI_PROJECT_ID"
+  untracked: true
+  paths:
+  - "sbt-cache/ivy/cache"
+  - "sbt-cache/boot"
+  - "sbt-cache/sbtboot"
+  - "sbt-cache/target"
+
+services:
+- name: docker:dind
+  command: ["--insecure-registry=$DOCKER_REGISTRY"]
+
+variables:
+  DOCKER_HOST: $DOCKER_DIND_HOST
+  DOCKER_DRIVER: $DOCKER_DIND_DRIVER
+  HTTPS_PROXY: $DOCKER_HTTP_PROXY
+  HTTP_PROXY: $DOCKER_HTTP_PROXY
+  NO_PROXY: $DOCKER_NO_PROXY
+  SBT_OPTS: "-Dsbt.global.base=sbt-cache/sbtboot -Dsbt.boot.directory=sbt-cache/boot -Dsbt.ivy.home=sbt-cache/ivy -Dhttp.proxyHost=$PROXY_HOST -Dhttp.proxyPort=$PROXY_PORT -Dhttp.nonProxyHosts=$PROXY_NON_HOSTS -Dhttps.proxyHost=$PROXY_HOST -Dhttps.proxyPort=$PROXY_PORT -Dhttps.nonProxyHosts=$PROXY_NON_HOSTS"
+  DOCKER_REGISTRY: $DOCKER_REGISTRY
+  DOCKER_IMAGE_PULL_POLICY: Always
+
+stages:
+- build
+
+Build:
+  stage: build
+  script:
+  - "./sbt clean compile"
+
+build snapshot:
+  stage: build
+  script:
+  - "./sbt project1/clean project1/test project1/publish"
+  when: manual
+  except:
+  - tags
+
+Build release:
+  stage: build
+  script:
+  - docker login t2ru-ds-registry-01:8888 -u $DOCKER_REGISTRY_USER -p $DOCKER_REGISTRY_PASSWORD
+  - "./sbt -DdockerUpdateLatest clean test publish docker:publish docker:clean"
+  only:
+  - tags
+
+.create_config_template: &create_config_def
+  stage: config
+  image: $DOCKER_REGISTRY/tele2-digital/k8s-kubectl-reactive-cli:1.7.1
+  script:
+  - kubectl --server="${K8S_SERVER}" --insecure-skip-tls-verify=true --token="${K8S_TOKEN}" --namespace=${CI_ENVIRONMENT_NAME} apply -f k8s/configMap.yml
+  when: on_success
+
+.test_build_template: &test_build_def
+  stage: test_build
+  script:
+  - docker login $DOCKER_REGISTRY -u $DOCKER_REGISTRY_USER -p $DOCKER_REGISTRY_PASSWORD
+  - "./sbt -DjvmDebugPort=5005 clean docker:publish docker:clean"
+  when: manual
+
+.deploy_template: &deploy_def
+  stage: deploy
+  image: $DOCKER_REGISTRY/dilvish13/k8s-kubectl-reactive-cli:1.7.1
+  script:
+  - ./k8s-bash/k8s_test_config.sh
+  - kubectl --server="${K8S_SERVER}" --insecure-skip-tls-verify=true --token="${K8S_TOKEN}" apply -f deploy_ymls
+  when: manual
+
+
+.namespace_yandex-gitlab: &yandex-gitlab
+  environment:
+    name: yandex-gitlab
+  variables:
+    DOCKER_IMAGE_VERSION: yandex-SNAPSHOT
+
+Config [yandex-gitlab]:
+  <<: *yandex-gitlab
+  <<: *create_config_def
+
+Test build [yandex-gitlab]:
+  <<: *yandex-gitlab
+  <<: *test_build_def
+
+Deploy [yandex-gitlab]:
+  <<: *yandex-gitlab
+  <<: *deploy_def

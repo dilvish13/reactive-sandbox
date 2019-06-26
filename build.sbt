@@ -5,7 +5,7 @@ name := "reactive-sandbox"
 
 TaskKey[Unit]("dockerBuildTagAndWarnAboutPublishing") := {
   val localTag = s"reactive-sandbox:${version.value}"
-  val remoteTag = s"lightbend-docker-registry.bintray.io/rp/$localTag"
+  val remoteTag = s"https://bintray.com/dilvish13/$localTag"
 
   val buildCommand = Vector("docker", "build", "-t", localTag, "./docker")
   val tagCommand = Vector("docker", "tag", localTag, remoteTag)
